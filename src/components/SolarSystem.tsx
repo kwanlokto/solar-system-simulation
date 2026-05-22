@@ -3,8 +3,12 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { PLANETS, MOON, BELT } from '@/lib/planets';
 import { getPlanetPosition, getOrbitPath, dateToJD, fmtDate, auMap } from '@/lib/orbital';
-import type { PlanetData } from '@/lib/orbital';
+import type { PlanetData, PlanetPos } from '@/lib/orbital';
+import { keplerStateAt, stepVerlet, MAX_SUBSTEP_DAYS, MAX_SUBSTEPS, type BodyState } from '@/lib/nbody';
 import ControlPanel from './ControlPanel';
+
+const BH_MASS = 1.0; // solar masses, applied to every placed black hole
+const TRAIL_LEN = 90;
 
 export interface SimState {
   paused: boolean;
@@ -27,6 +31,7 @@ interface BlackHole {
   x: number;
   y: number;
   z: number;
+  mass: number;
 }
 
 const J2000 = 2451545.0;
@@ -72,6 +77,18 @@ export default function SolarSystem() {
   const placingBHRef = useRef(false);
   useEffect(() => { placingBHRef.current = placingBH; }, [placingBH]);
 
+  // When any BH is placed, planets are integrated numerically from this state.
+  // Null = pure-Kepler analytical propagation.
+  const nbodyRef = useRef<BodyState[] | null>(null);
+  // Cached current planet positions for hover detection + rendering (one entry per PLANETS).
+  const positionsRef = useRef<PlanetPos[]>(
+    PLANETS.map(p => getPlanetPosition(p, dateToJD(new Date())))
+  );
+  // Position history for trail rendering when in N-body mode.
+  const trailsRef = useRef<Array<Array<[number, number, number]>>>(
+    PLANETS.map(() => [])
+  );
+
   const [dateStr, setDateStr] = useState('');
   const [sunAgeGyr, setSunAgeGyr] = useState(SUN_AGE_J2000_YEARS / 1e9);
   const [, forceUpdate] = useState(0);
@@ -101,7 +118,11 @@ export default function SolarSystem() {
   }, []);
 
   const togglePlaceBH = useCallback(() => setPlacingBH(v => !v), []);
-  const clearBlackHoles = useCallback(() => setBlackHoles([]), []);
+  const clearBlackHoles = useCallback(() => {
+    nbodyRef.current = null;
+    trailsRef.current = PLANETS.map(() => []);
+    setBlackHoles([]);
+  }, []);
 
   // Inverse-project a screen click onto the ecliptic z=0 plane.
   // Derivation: screen radial r_screen = scale * auMap(r_3d). Inverting auMap gives r_3d,
@@ -142,7 +163,41 @@ export default function SolarSystem() {
     if (!lastTRef.current) lastTRef.current = ts;
     const dt = Math.min((ts - lastTRef.current) / 1000, 0.1);
     lastTRef.current = ts;
-    if (!paused) simJDRef.current += Math.pow(10, speedExp) * dt;
+
+    if (!paused) {
+      const requested = Math.pow(10, speedExp) * dt;
+      if (nbodyRef.current) {
+        // N-body: integrate with bounded substeps so high speedExp can't blow up Verlet
+        const maxAdvance = MAX_SUBSTEPS * MAX_SUBSTEP_DAYS;
+        const advance = Math.min(requested, maxAdvance);
+        const nSub = Math.max(1, Math.ceil(advance / MAX_SUBSTEP_DAYS));
+        const dtSub = advance / nSub;
+        const bhs = blackHolesRef.current;
+        const states = nbodyRef.current;
+        for (let i = 0; i < nSub; i++) {
+          for (let j = 0; j < states.length; j++) stepVerlet(states[j], bhs, dtSub);
+        }
+        simJDRef.current += advance;
+      } else {
+        simJDRef.current += requested;
+      }
+    }
+
+    // Refresh cached positions used by render + hover detection.
+    if (nbodyRef.current) {
+      for (let i = 0; i < PLANETS.length; i++) {
+        const s = nbodyRef.current[i];
+        const r = Math.sqrt(s.x * s.x + s.y * s.y + s.z * s.z);
+        positionsRef.current[i] = { x: s.x, y: s.y, z: s.z, r };
+        const tr = trailsRef.current[i];
+        tr.push([s.x, s.y, s.z]);
+        if (tr.length > TRAIL_LEN) tr.shift();
+      }
+    } else {
+      for (let i = 0; i < PLANETS.length; i++) {
+        positionsRef.current[i] = getPlanetPosition(PLANETS[i], simJDRef.current);
+      }
+    }
 
     const W = canvas.width, H = canvas.height;
     const cx = W / 2 + panX, cy = H / 2 + panY;
@@ -188,7 +243,10 @@ export default function SolarSystem() {
       ctx.fill();
     }
 
+    const nbodyOn = nbodyRef.current !== null;
+
     if (showOrbits) {
+      const orbitAlphaHex = nbodyOn ? '15' : '30';
       for (const p of PLANETS) {
         const path = getOrbitPath(p);
         ctx.beginPath();
@@ -197,9 +255,31 @@ export default function SolarSystem() {
           i === 0 ? ctx.moveTo(sx, sy) : ctx.lineTo(sx, sy);
         });
         ctx.closePath();
-        ctx.strokeStyle = p.color + '30';
+        ctx.strokeStyle = p.color + orbitAlphaHex;
         ctx.lineWidth = 0.8;
         ctx.stroke();
+      }
+    }
+
+    // Perturbation trails (under planets, above orbit rings)
+    if (nbodyOn) {
+      ctx.lineWidth = 1.4;
+      for (let i = 0; i < PLANETS.length; i++) {
+        const trail = trailsRef.current[i];
+        if (trail.length < 2) continue;
+        const color = PLANETS[i].color;
+        for (let k = 1; k < trail.length; k++) {
+          const t0 = trail[k - 1], t1 = trail[k];
+          const [sx0, sy0] = toScreen(t0[0], t0[1], t0[2]);
+          const [sx1, sy1] = toScreen(t1[0], t1[1], t1[2]);
+          const a = k / trail.length;
+          const ah = Math.floor(a * 220).toString(16).padStart(2, '0');
+          ctx.beginPath();
+          ctx.moveTo(sx0, sy0);
+          ctx.lineTo(sx1, sy1);
+          ctx.strokeStyle = color + ah;
+          ctx.stroke();
+        }
       }
     }
 
@@ -225,8 +305,8 @@ export default function SolarSystem() {
     }
 
     const jd = simJDRef.current;
-    const planetList = PLANETS.map(p => {
-      const pos = getPlanetPosition(p, jd);
+    const planetList = PLANETS.map((p, i) => {
+      const pos = positionsRef.current[i];
       return { p, pos, depth: camZ(pos.x, pos.y, pos.z) };
     });
     planetList.sort((a, b) => b.depth - a.depth);
@@ -404,11 +484,13 @@ export default function SolarSystem() {
 
     let found: PlanetData | null = null;
     let foundDist = 0;
-    for (const p of PLANETS) {
-      const pos = getPlanetPosition(p, simJDRef.current);
+    for (let i = 0; i < PLANETS.length; i++) {
+      const p = PLANETS[i];
+      const pos = positionsRef.current[i];
       const x1 = pos.x * cosAz + pos.y * sinAz;
       const y1 = -pos.x * sinAz + pos.y * cosAz;
       const px = x1, py = y1 * cosEl + pos.z * sinEl;
+      if (pos.r < 1e-9) continue;
       const sf = auMap(pos.r, logScale) * scale / pos.r;
       const sx = cx + px * sf, sy = cy - py * sf;
       if (Math.hypot(e.clientX - sx, e.clientY - sy) < p.displayRadius + 10) {
@@ -431,7 +513,14 @@ export default function SolarSystem() {
 
     const pos = screenToEcliptic(e.clientX, e.clientY);
     if (!pos) return;
-    setBlackHoles(prev => [...prev, { id: Date.now() + Math.random(), x: pos.x, y: pos.y, z: 0 }]);
+    setBlackHoles(prev => {
+      if (prev.length === 0) {
+        // Transitioning Kepler → N-body: seed integrator state from current Kepler positions.
+        nbodyRef.current = PLANETS.map(p => keplerStateAt(p, simJDRef.current));
+        trailsRef.current = PLANETS.map(() => []);
+      }
+      return [...prev, { id: Date.now() + Math.random(), x: pos.x, y: pos.y, z: 0, mass: BH_MASS }];
+    });
     setPlacingBH(false);
   }, [screenToEcliptic]);
 
