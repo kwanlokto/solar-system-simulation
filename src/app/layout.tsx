@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { Geist_Mono } from "next/font/google";
-import MuiRegistry from "@/components/MuiRegistry";
 import "./globals.css";
 
 const mono = Geist_Mono({ variable: "--font-mono", subsets: ["latin"] });
@@ -13,9 +12,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${mono.variable} h-full`}>
-      <body className="min-h-full flex flex-col">
-        <MuiRegistry>{children}</MuiRegistry>
-      </body>
+      <body className="min-h-full flex flex-col">{children}</body>
     </html>
   );
 }

@@ -18,13 +18,21 @@ interface ViewState {
   zoom: number;
   panX: number;
   panY: number;
-  /** spin around ecliptic north pole, radians */
   rotAz: number;
-  /** tilt from top-down: 0 = top, π/2 = edge-on, radians */
   rotEl: number;
 }
 
-// Deterministic star field
+interface BlackHole {
+  id: number;
+  x: number;
+  y: number;
+  z: number;
+}
+
+const J2000 = 2451545.0;
+const SUN_AGE_J2000_YEARS = 4.603e9;
+const SUN_LIFESPAN_YEARS = 10e9;
+
 function buildStars(count: number) {
   function mur(seed: number) {
     let s = seed | 0;
@@ -52,12 +60,20 @@ export default function SolarSystem() {
   const rafRef = useRef<number>(0);
   const lastTRef = useRef<number | null>(null);
 
-  // Pan drag (left button)
   const panDragRef = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
-  // Rotate drag (right button)
   const rotDragRef = useRef<{ x: number; y: number; az: number; el: number } | null>(null);
+  const mouseDownPosRef = useRef<{ x: number; y: number } | null>(null);
+
+  const [blackHoles, setBlackHoles] = useState<BlackHole[]>([]);
+  const blackHolesRef = useRef<BlackHole[]>([]);
+  useEffect(() => { blackHolesRef.current = blackHoles; }, [blackHoles]);
+
+  const [placingBH, setPlacingBH] = useState(false);
+  const placingBHRef = useRef(false);
+  useEffect(() => { placingBHRef.current = placingBH; }, [placingBH]);
 
   const [dateStr, setDateStr] = useState('');
+  const [sunAgeGyr, setSunAgeGyr] = useState(SUN_AGE_J2000_YEARS / 1e9);
   const [, forceUpdate] = useState(0);
   const [tooltip, setTooltip] = useState<{
     visible: boolean; x: number; y: number;
@@ -84,17 +100,38 @@ export default function SolarSystem() {
     viewRef.current.panY = 0;
   }, []);
 
-  // ── 3D projection helpers (recreated each frame inside draw) ──────────────
-  //
-  // Rotation: first spin around ecliptic Z (azimuth), then tilt around
-  // the resulting X axis (elevation). With rotEl=0 you see top-down;
-  // rotEl=π/2 is edge-on looking along +Y.
-  //
-  // toScreen maps a 3D ecliptic AU position to canvas pixels via an
-  // orthographic projection scaled by the actual 3D heliocentric distance
-  // so log-scale compression stays physically meaningful.
+  const togglePlaceBH = useCallback(() => setPlacingBH(v => !v), []);
+  const clearBlackHoles = useCallback(() => setBlackHoles([]), []);
 
-  // ── Main render loop ──────────────────────────────────────────────────────
+  // Inverse-project a screen click onto the ecliptic z=0 plane.
+  // Derivation: screen radial r_screen = scale * auMap(r_3d). Inverting auMap gives r_3d,
+  // and the angular pair (px, py/cosEl) recovers the rotated XY which we un-rotate by -rotAz.
+  const screenToEcliptic = useCallback((sx: number, sy: number): { x: number; y: number } | null => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const { zoom, panX, panY, rotAz, rotEl } = viewRef.current;
+    const { logScale } = stateRef.current;
+    const W = canvas.width, H = canvas.height;
+    const cx = W / 2 + panX, cy = H / 2 + panY;
+    const scale = Math.min(W, H) * 0.44 / auMap(32, logScale) * zoom;
+
+    const u = sx - cx;
+    const v = cy - sy;
+    const cosEl = Math.cos(rotEl);
+    if (Math.abs(cosEl) < 1e-3) return null;
+
+    const screen_au = Math.sqrt(u * u + (v / cosEl) * (v / cosEl)) / scale;
+    const r = logScale ? Math.pow(10, screen_au / 20.09) - 1 : screen_au;
+    if (r <= 1e-6 || !isFinite(r)) return null;
+
+    const sf = auMap(r, logScale) * scale / r;
+    const pp = u / sf;
+    const pq = (v / sf) / cosEl;
+
+    const cosAz = Math.cos(rotAz), sinAz = Math.sin(rotAz);
+    return { x: pp * cosAz - pq * sinAz, y: pp * sinAz + pq * cosAz };
+  }, []);
+
   const draw = useCallback((ts: number) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -115,13 +152,9 @@ export default function SolarSystem() {
     const cosEl = Math.cos(rotEl), sinEl = Math.sin(rotEl);
 
     function project(ax: number, ay: number, az: number): [number, number] {
-      // azimuth: spin in XY
       const x1 = ax * cosAz + ay * sinAz;
       const y1 = -ax * sinAz + ay * cosAz;
-      // elevation: tilt Z into screen-Y
-      const px = x1;
-      const py = y1 * cosEl + az * sinEl;
-      return [px, py];
+      return [x1, y1 * cosEl + az * sinEl];
     }
 
     function toScreen(ax: number, ay: number, az: number = 0): [number, number] {
@@ -132,17 +165,14 @@ export default function SolarSystem() {
       return [cx + px * sf, cy - py * sf];
     }
 
-    // Camera-space depth: negative = closer to viewer
     function camZ(ax: number, ay: number, az: number): number {
       const y1 = -ax * sinAz + ay * cosAz;
       return -y1 * sinEl + az * cosEl;
     }
 
-    // ── Draw ─────────────────────────────────────────────────────────────────
     ctx.fillStyle = '#00001c';
     ctx.fillRect(0, 0, W, H);
 
-    // Stars
     for (const { x, y, b, s } of STARS) {
       ctx.beginPath();
       ctx.arc(x * W, y * H, s, 0, Math.PI * 2);
@@ -150,7 +180,6 @@ export default function SolarSystem() {
       ctx.fill();
     }
 
-    // Asteroid belt (ecliptic plane, z=0)
     for (const { t, r } of BELT) {
       const [sx, sy] = toScreen(r * Math.cos(t), r * Math.sin(t), 0);
       ctx.beginPath();
@@ -159,7 +188,6 @@ export default function SolarSystem() {
       ctx.fill();
     }
 
-    // Orbit paths (drawn before planets so they appear behind)
     if (showOrbits) {
       for (const p of PLANETS) {
         const path = getOrbitPath(p);
@@ -196,13 +224,11 @@ export default function SolarSystem() {
       ctx.fillText('Sun', cx + 22, cy - 18);
     }
 
-    // Planets — depth-sorted so closer ones render on top
     const jd = simJDRef.current;
     const planetList = PLANETS.map(p => {
       const pos = getPlanetPosition(p, jd);
       return { p, pos, depth: camZ(pos.x, pos.y, pos.z) };
     });
-    // Draw farthest first
     planetList.sort((a, b) => b.depth - a.depth);
 
     let earthSX = 0, earthSY = 0;
@@ -210,18 +236,15 @@ export default function SolarSystem() {
       const [sx, sy] = toScreen(pos.x, pos.y, pos.z);
       const r = Math.max(p.displayRadius, 2.5);
 
-      // glow
       const pg = ctx.createRadialGradient(sx, sy, 0, sx, sy, r * 3.5);
       pg.addColorStop(0, p.color + 'aa');
       pg.addColorStop(1, p.color + '00');
       ctx.beginPath(); ctx.arc(sx, sy, r * 3.5, 0, Math.PI * 2);
       ctx.fillStyle = pg; ctx.fill();
 
-      // body
       ctx.beginPath(); ctx.arc(sx, sy, r, 0, Math.PI * 2);
       ctx.fillStyle = p.color; ctx.fill();
 
-      // Saturn rings
       if (p.name === 'Saturn') {
         ctx.save(); ctx.translate(sx, sy); ctx.scale(1, 0.28);
         for (const [rm, al, lw] of [[2.5, 'cc', 3], [2.0, '88', 2], [1.6, '55', 1.5]] as [number, string, number][]) {
@@ -231,7 +254,6 @@ export default function SolarSystem() {
         ctx.restore();
       }
 
-      // Uranus ring
       if (p.name === 'Uranus') {
         ctx.save(); ctx.translate(sx, sy); ctx.scale(1, 0.4);
         ctx.beginPath(); ctx.arc(0, 0, r * 1.9, 0, Math.PI * 2);
@@ -249,7 +271,6 @@ export default function SolarSystem() {
       if (p.name === 'Earth') { earthSX = sx; earthSY = sy; }
     }
 
-    // Moon (screen-space orbit — not to scale, for visual character)
     const moonAngle = (jd / MOON.period) * Math.PI * 2;
     ctx.beginPath();
     ctx.arc(earthSX, earthSY, MOON.orbitPx, 0, Math.PI * 2);
@@ -260,11 +281,63 @@ export default function SolarSystem() {
             MOON.radius, 0, Math.PI * 2);
     ctx.fillStyle = MOON.color; ctx.fill();
 
+    // Black holes (with depth sort against planets would be ideal; for clarity render on top)
+    const bhList = blackHolesRef.current.map(bh => ({
+      bh, depth: camZ(bh.x, bh.y, bh.z),
+    })).sort((a, b) => b.depth - a.depth);
+
+    const tspin = (ts / 1000) * 0.6;
+    for (const { bh } of bhList) {
+      const [sx, sy] = toScreen(bh.x, bh.y, bh.z);
+      const eh = 7;
+
+      // Outer halo
+      const halo = ctx.createRadialGradient(sx, sy, eh, sx, sy, eh * 7);
+      halo.addColorStop(0, 'rgba(255,140,40,0.55)');
+      halo.addColorStop(0.4, 'rgba(180,50,20,0.25)');
+      halo.addColorStop(1, 'rgba(80,10,10,0)');
+      ctx.beginPath(); ctx.arc(sx, sy, eh * 7, 0, Math.PI * 2);
+      ctx.fillStyle = halo; ctx.fill();
+
+      // Accretion disk: tilted ring with rotating brightness
+      ctx.save();
+      ctx.translate(sx, sy);
+      ctx.rotate(rotAz);
+      ctx.scale(1, Math.max(0.18, Math.abs(cosEl)));
+      for (let k = 0; k < 60; k++) {
+        const a0 = (k / 60) * Math.PI * 2 + tspin;
+        const a1 = ((k + 1) / 60) * Math.PI * 2 + tspin;
+        const bright = 0.4 + 0.6 * Math.pow(0.5 + 0.5 * Math.cos(a0 - tspin * 3), 2);
+        ctx.beginPath();
+        ctx.arc(0, 0, eh * 2.4, a0, a1);
+        ctx.strokeStyle = `rgba(255,${150 + Math.floor(80 * bright)},${60 * bright},${0.55 * bright + 0.2})`;
+        ctx.lineWidth = 4;
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // Photon ring
+      ctx.beginPath(); ctx.arc(sx, sy, eh * 1.35, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255,230,190,0.75)';
+      ctx.lineWidth = 1.2; ctx.stroke();
+
+      // Event horizon
+      ctx.beginPath(); ctx.arc(sx, sy, eh, 0, Math.PI * 2);
+      ctx.fillStyle = '#000'; ctx.fill();
+
+      if (showLabels) {
+        ctx.fillStyle = 'rgba(255,140,60,0.85)';
+        ctx.font = '11px monospace';
+        ctx.textAlign = 'left';
+        ctx.fillText('Black Hole', sx + eh + 6, sy - eh + 1);
+      }
+    }
+
     setDateStr(fmtDate(jd));
+    setSunAgeGyr((SUN_AGE_J2000_YEARS + (jd - J2000) / 365.25) / 1e9);
     rafRef.current = requestAnimationFrame(draw);
   }, []);
 
-  // ── Resize + start loop ───────────────────────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current!;
     function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
@@ -274,7 +347,14 @@ export default function SolarSystem() {
     return () => { cancelAnimationFrame(rafRef.current); window.removeEventListener('resize', resize); };
   }, [draw]);
 
-  // ── Wheel zoom ────────────────────────────────────────────────────────────
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && placingBHRef.current) setPlacingBH(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   useEffect(() => {
     const canvas = canvasRef.current!;
     const onWheel = (e: WheelEvent) => {
@@ -286,8 +366,9 @@ export default function SolarSystem() {
     return () => canvas.removeEventListener('wheel', onWheel);
   }, []);
 
-  // ── Mouse: pan (left) + rotate (right) ───────────────────────────────────
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    mouseDownPosRef.current = { x: e.clientX, y: e.clientY };
+    if (placingBHRef.current && e.button === 0) return;
     if (e.button === 2) {
       const { rotAz, rotEl } = viewRef.current;
       rotDragRef.current = { x: e.clientX, y: e.clientY, az: rotAz, el: rotEl };
@@ -311,7 +392,6 @@ export default function SolarSystem() {
         d.el - (e.clientY - d.y) * SENS));
     }
 
-    // Hover detection
     const canvas = canvasRef.current!;
     const { zoom, panX, panY, rotAz, rotEl, logScale } = {
       ...viewRef.current, logScale: stateRef.current.logScale,
@@ -338,34 +418,71 @@ export default function SolarSystem() {
     setTooltip({ visible: !!found, x: e.clientX, y: e.clientY, planet: found, dist: foundDist });
   }, []);
 
-  const handleMouseUp = useCallback(() => {
+  const handleMouseUp = useCallback((e: React.MouseEvent) => {
+    const down = mouseDownPosRef.current;
+    mouseDownPosRef.current = null;
     panDragRef.current = null;
     rotDragRef.current = null;
-  }, []);
+
+    if (!placingBHRef.current || !down) return;
+    if (e.button !== 0) return;
+    const dx = e.clientX - down.x, dy = e.clientY - down.y;
+    if (Math.hypot(dx, dy) > 4) return; // dragged, not clicked
+
+    const pos = screenToEcliptic(e.clientX, e.clientY);
+    if (!pos) return;
+    setBlackHoles(prev => [...prev, { id: Date.now() + Math.random(), x: pos.x, y: pos.y, z: 0 }]);
+    setPlacingBH(false);
+  }, [screenToEcliptic]);
+
+  const cursor = placingBH
+    ? 'crosshair'
+    : rotDragRef.current || panDragRef.current
+      ? 'grabbing'
+      : 'grab';
+
+  const sunProgress = Math.min(1, Math.max(0, (sunAgeGyr * 1e9) / SUN_LIFESPAN_YEARS));
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-black select-none">
       <canvas
         ref={canvasRef}
         className="absolute inset-0"
-        style={{ cursor: rotDragRef.current ? 'grabbing' : panDragRef.current ? 'grabbing' : 'grab' }}
+        style={{ cursor }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp}
+        onMouseLeave={() => {
+          mouseDownPosRef.current = null;
+          panDragRef.current = null;
+          rotDragRef.current = null;
+        }}
         onContextMenu={e => e.preventDefault()}
       />
 
       <ControlPanel
         state={stateRef.current}
         dateStr={dateStr}
+        sunAgeGyr={sunAgeGyr}
+        sunProgress={sunProgress}
+        blackHoleCount={blackHoles.length}
+        placingBH={placingBH}
         onUpdate={updateState}
         onResetView={resetView}
         onJumpToNow={jumpToNow}
         onSetViewAngle={setViewAngle}
+        onTogglePlaceBH={togglePlaceBH}
+        onClearBlackHoles={clearBlackHoles}
       />
 
-      {/* Tooltip */}
+      {placingBH && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-20 px-5 py-3 rounded-xl font-mono text-sm
+                        bg-[rgba(3,6,22,0.94)] border border-[rgba(255,140,60,0.5)]
+                        text-[#ffb070] shadow-[0_0_24px_rgba(255,140,40,0.25)] backdrop-blur-md">
+          Click on the simulation to place a black hole · Esc to cancel
+        </div>
+      )}
+
       {tooltip.visible && tooltip.planet && (
         <div
           className="fixed pointer-events-none z-20 rounded-xl"
@@ -391,11 +508,11 @@ export default function SolarSystem() {
             {tooltip.planet.name}
           </div>
           {[
-            ['Distance',   `${tooltip.dist.toFixed(3)} AU`],
-            ['Semi-major', `${tooltip.planet.a.toFixed(3)} AU`],
-            ['Inclination',`${tooltip.planet.i.toFixed(2)}°`],
-            ['Eccentricity',tooltip.planet.e.toFixed(5)],
-            ['Period',     `${Math.pow(tooltip.planet.a, 1.5).toFixed(2)} yr`],
+            ['Distance',    `${tooltip.dist.toFixed(3)} AU`],
+            ['Semi-major',  `${tooltip.planet.a.toFixed(3)} AU`],
+            ['Inclination', `${tooltip.planet.i.toFixed(2)}°`],
+            ['Eccentricity', tooltip.planet.e.toFixed(5)],
+            ['Period',      `${Math.pow(tooltip.planet.a, 1.5).toFixed(2)} yr`],
           ].map(([label, value]) => (
             <div key={label} className="flex justify-between gap-5 mb-1 last:mb-0">
               <span style={{ color: '#445566', fontSize: 11 }}>{label}</span>
@@ -405,7 +522,6 @@ export default function SolarSystem() {
         </div>
       )}
 
-      {/* Legend */}
       <div
         className="fixed bottom-4 left-4 rounded-2xl grid gap-x-5 gap-y-2"
         style={{
@@ -421,7 +537,7 @@ export default function SolarSystem() {
         {PLANETS.map(p => (
           <div key={p.name} className="flex items-center gap-2" style={{ color: '#6677aa', fontSize: 12 }}>
             <span
-              className="rounded-full flex-shrink-0"
+              className="rounded-full shrink-0"
               style={{ width: 8, height: 8, background: p.color, boxShadow: `0 0 6px ${p.color}88` }}
             />
             {p.name}
@@ -429,7 +545,6 @@ export default function SolarSystem() {
         ))}
       </div>
 
-      {/* Hints */}
       <div
         className="fixed bottom-4 right-4 rounded-2xl"
         style={{

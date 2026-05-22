@@ -1,67 +1,7 @@
 'use client';
 
-import {
-  Button, ButtonGroup, Divider, Paper,
-  Slider, Stack, Typography,
-} from '@mui/material';
-import { createTheme, ThemeProvider } from '@mui/material/styles';
 import { SimState } from './SolarSystem';
 
-// ── Dark space theme ──────────────────────────────────────────────────────────
-const theme = createTheme({
-  palette: {
-    mode: 'dark',
-    primary: { main: '#5577ff' },
-    background: { paper: 'transparent' },
-  },
-  typography: {
-    fontFamily: '"Geist Mono", "Courier New", monospace',
-  },
-  components: {
-    MuiButton: {
-      styleOverrides: {
-        root: {
-          textTransform: 'none',
-          fontFamily: '"Geist Mono", "Courier New", monospace',
-          fontSize: 13,
-          letterSpacing: '0.03em',
-          borderRadius: 10,
-          padding: '9px 18px',
-          minWidth: 0,
-          lineHeight: 1.4,
-          transition: 'all 0.15s ease',
-        },
-      },
-    },
-    MuiButtonGroup: {
-      styleOverrides: {
-        root: { borderRadius: 10 },
-        grouped: {
-          '&:not(:last-of-type)': { borderColor: 'rgba(80,120,255,0.2)' },
-        },
-      },
-    },
-    MuiSlider: {
-      styleOverrides: {
-        root: { color: '#5577ff', height: 4, padding: '12px 0' },
-        thumb: {
-          width: 16, height: 16,
-          boxShadow: '0 0 10px rgba(85,119,255,0.6)',
-          '&:hover, &.Mui-focusVisible': { boxShadow: '0 0 0 8px rgba(85,119,255,0.15)' },
-        },
-        track: { border: 'none', borderRadius: 2 },
-        rail: { opacity: 0.25, borderRadius: 2 },
-      },
-    },
-    MuiDivider: {
-      styleOverrides: {
-        root: { borderColor: 'rgba(80,120,255,0.15)', marginBlock: 18 },
-      },
-    },
-  },
-});
-
-// ── Speed formatting ──────────────────────────────────────────────────────────
 function fmtSpeed(exp: number): string {
   const dps = Math.pow(10, exp);
   if (dps < 0.042) return `${(dps * 24).toFixed(1)} h/s`;
@@ -70,205 +10,219 @@ function fmtSpeed(exp: number): string {
   return `${(dps / 365.25).toFixed(1)} y/s`;
 }
 
-// ── Shared button styles ──────────────────────────────────────────────────────
-function activeStyle(on: boolean) {
-  return on
-    ? {
-        background: 'linear-gradient(135deg, rgba(85,119,255,0.65), rgba(55,90,220,0.55))',
-        borderColor: 'rgba(120,160,255,0.65)',
-        color: '#dde8ff',
-        boxShadow: '0 0 14px rgba(85,119,255,0.3)',
-        '&:hover': {
-          background: 'linear-gradient(135deg, rgba(95,130,255,0.75), rgba(65,100,230,0.65))',
-        },
-      }
-    : {
-        background: 'rgba(255,255,255,0.04)',
-        borderColor: 'rgba(255,255,255,0.1)',
-        color: '#6677aa',
-        '&:hover': { background: 'rgba(255,255,255,0.09)', borderColor: 'rgba(255,255,255,0.2)' },
-      };
+const BTN_BASE =
+  'rounded-xl text-[13px] leading-tight tracking-[0.03em] font-mono select-none ' +
+  'border transition-all duration-150 cursor-pointer';
+
+const BTN_OFF =
+  'bg-white/[0.04] border-white/10 text-[#8a9bc4] ' +
+  'hover:bg-white/[0.09] hover:border-white/20 hover:text-[#c2d0eb]';
+
+const BTN_ON =
+  'text-[#eaf1ff] border-[rgba(120,160,255,0.65)] ' +
+  'bg-[linear-gradient(135deg,rgba(85,119,255,0.65),rgba(55,90,220,0.55))] ' +
+  'shadow-[0_0_14px_rgba(85,119,255,0.3)] ' +
+  'hover:bg-[linear-gradient(135deg,rgba(95,130,255,0.75),rgba(65,100,230,0.65))]';
+
+const BTN_DANGER_ON =
+  'text-[#fff2e0] border-[rgba(255,140,60,0.7)] ' +
+  'bg-[linear-gradient(135deg,rgba(255,120,40,0.65),rgba(200,60,20,0.55))] ' +
+  'shadow-[0_0_18px_rgba(255,120,40,0.35)] ' +
+  'hover:bg-[linear-gradient(135deg,rgba(255,140,60,0.75),rgba(220,80,30,0.65))]';
+
+function btn(on: boolean, extra = '') {
+  return `${BTN_BASE} ${on ? BTN_ON : BTN_OFF} ${extra}`;
 }
+
+function dangerBtn(on: boolean, extra = '') {
+  return `${BTN_BASE} ${on ? BTN_DANGER_ON : BTN_OFF} ${extra}`;
+}
+
+const SECTION_LABEL =
+  'text-[10px] uppercase tracking-[0.18em] text-[#5d6f97] mb-3 font-semibold';
 
 interface Props {
   state: SimState;
   dateStr: string;
+  sunAgeGyr: number;
+  sunProgress: number;
+  blackHoleCount: number;
+  placingBH: boolean;
   onUpdate: (patch: Partial<SimState>) => void;
   onResetView: () => void;
   onJumpToNow: () => void;
   onSetViewAngle: (az: number, el: number) => void;
+  onTogglePlaceBH: () => void;
+  onClearBlackHoles: () => void;
 }
 
 export default function ControlPanel({
-  state, dateStr, onUpdate, onResetView, onJumpToNow, onSetViewAngle,
+  state, dateStr, sunAgeGyr, sunProgress, blackHoleCount, placingBH,
+  onUpdate, onResetView, onJumpToNow, onSetViewAngle,
+  onTogglePlaceBH, onClearBlackHoles,
 }: Props) {
   return (
-    <ThemeProvider theme={theme}>
-      <Paper
-        elevation={0}
-        sx={{
-          position: 'fixed', top: 16, left: 16, zIndex: 10,
-          width: 300,
-          background: 'rgba(3,6,22,0.93)',
-          border: '1px solid rgba(70,110,220,0.25)',
-          borderRadius: 4,
-          boxShadow: '0 8px 48px rgba(0,0,20,0.8), inset 0 1px 0 rgba(255,255,255,0.04)',
-          backdropFilter: 'blur(20px)',
-          p: 3,
-        }}
-      >
-        {/* Title */}
-        <Stack direction="row" alignItems="center" spacing={1} mb={0.5}>
-          <Typography sx={{ fontSize: 17, lineHeight: 1 }}>☀</Typography>
-          <Typography
-            sx={{
-              fontSize: 10, letterSpacing: '0.22em', textTransform: 'uppercase',
-              color: 'rgba(120,160,255,0.65)', fontWeight: 600,
+    <div
+      className="fixed top-5 left-5 z-10 w-[360px] rounded-2xl p-7 font-mono
+                 bg-[rgba(3,6,22,0.93)] border border-[rgba(70,110,220,0.25)]
+                 shadow-[0_8px_48px_rgba(0,0,20,0.8),inset_0_1px_0_rgba(255,255,255,0.04)]
+                 backdrop-blur-[20px]"
+    >
+      {/* Title */}
+      <div className="flex items-center gap-2 mb-1">
+        <span className="text-[18px] leading-none">☀</span>
+        <span className="text-[10px] tracking-[0.22em] uppercase font-semibold text-[rgba(120,160,255,0.7)]">
+          Solar System
+        </span>
+      </div>
+
+      <div className="text-[18px] tracking-[0.04em] mt-4 mb-1 text-[#ffd966] tabular-nums">
+        {dateStr}
+      </div>
+
+      {/* Sun age */}
+      <div className="mt-4 mb-6">
+        <div className="flex justify-between items-baseline mb-2">
+          <span className="text-[10px] uppercase tracking-[0.18em] text-[#5d6f97] font-semibold">
+            Sun Age
+          </span>
+          <span className="text-[13px] text-[#ffa66b] tabular-nums">
+            {sunAgeGyr.toFixed(4)} <span className="text-[11px] text-[#7a6045]">Gyr</span>
+          </span>
+        </div>
+        <div className="h-[6px] rounded-full bg-white/[0.06] overflow-hidden border border-white/[0.05]">
+          <div
+            className="h-full rounded-full transition-[width] duration-150"
+            style={{
+              width: `${sunProgress * 100}%`,
+              background: 'linear-gradient(90deg,#ffd966,#ff7a3a 70%,#c63030)',
+              boxShadow: '0 0 10px rgba(255,140,60,0.55)',
             }}
-          >
-            Solar System
-          </Typography>
-        </Stack>
-
-        {/* Date */}
-        <Typography
-          sx={{
-            fontSize: 16, color: '#ffd966', letterSpacing: '0.04em',
-            mt: 1.5, mb: 3, fontVariantNumeric: 'tabular-nums',
-          }}
-        >
-          {dateStr}
-        </Typography>
-
-        {/* Playback buttons */}
-        <Stack direction="row" spacing={1.5} mb={3}>
-          <Button
-            fullWidth variant="outlined"
-            onClick={() => onUpdate({ paused: !state.paused })}
-            sx={activeStyle(!state.paused)}
-          >
-            {state.paused ? '▶  Play' : '⏸  Pause'}
-          </Button>
-          <Button
-            fullWidth variant="outlined"
-            onClick={onJumpToNow}
-            sx={activeStyle(false)}
-          >
-            ⊙  Today
-          </Button>
-        </Stack>
-
-        {/* Speed slider */}
-        <Stack direction="row" alignItems="center" spacing={2} mb={0.5}>
-          <Typography sx={{ fontSize: 11, color: '#445566', width: 44, flexShrink: 0, letterSpacing: '0.06em' }}>
-            Speed
-          </Typography>
-          <Slider
-            min={-1} max={5.5} step={0.05}
-            value={state.speedExp}
-            onChange={(_, v) => onUpdate({ speedExp: v as number })}
-            sx={{ flex: 1 }}
           />
-          <Typography
-            sx={{
-              fontSize: 12, color: '#ffd966', textAlign: 'right',
-              width: 58, flexShrink: 0, fontVariantNumeric: 'tabular-nums',
-            }}
-          >
-            {fmtSpeed(state.speedExp)}
-          </Typography>
-        </Stack>
+        </div>
+        <div className="flex justify-between text-[10px] mt-1.5 text-[#445566] tabular-nums">
+          <span>0</span>
+          <span>main-sequence · 10 Gyr</span>
+        </div>
+      </div>
 
-        <Divider />
+      <div className="border-t border-[rgba(80,120,255,0.15)] mb-6" />
 
-        {/* View presets */}
-        <Stack direction="row" alignItems="center" spacing={2} mb={2.5}>
-          <Typography sx={{ fontSize: 11, color: '#445566', width: 44, flexShrink: 0, letterSpacing: '0.06em' }}>
-            View
-          </Typography>
-          <ButtonGroup fullWidth variant="outlined" size="small">
-            {([
-              ['Top',  () => onSetViewAngle(0, 0)],
-              ['Edge', () => onSetViewAngle(0, Math.PI / 2)],
-              ['3D',   () => onSetViewAngle(Math.PI / 5, Math.PI / 4)],
-            ] as [string, () => void][]).map(([label, handler]) => (
-              <Button
-                key={label}
-                onClick={handler}
-                sx={{
-                  ...activeStyle(false),
-                  borderRadius: '10px !important',
-                  fontSize: 12, py: 1.2,
-                }}
-              >
-                {label}
-              </Button>
-            ))}
-          </ButtonGroup>
-        </Stack>
-
-        {/* Scale toggle */}
-        <Stack direction="row" alignItems="center" spacing={2} mb={2.5}>
-          <Typography sx={{ fontSize: 11, color: '#445566', width: 44, flexShrink: 0, letterSpacing: '0.06em' }}>
-            Scale
-          </Typography>
-          <Stack direction="row" spacing={1.5} flex={1}>
-            <Button
-              fullWidth variant="outlined" size="small"
-              onClick={() => onUpdate({ logScale: false })}
-              sx={{ ...activeStyle(!state.logScale), fontSize: 12, py: 1.2, borderRadius: '10px' }}
-            >
-              Linear
-            </Button>
-            <Button
-              fullWidth variant="outlined" size="small"
-              onClick={() => onUpdate({ logScale: true })}
-              sx={{ ...activeStyle(state.logScale), fontSize: 12, py: 1.2, borderRadius: '10px' }}
-            >
-              Log
-            </Button>
-          </Stack>
-        </Stack>
-
-        {/* Show toggles */}
-        <Stack direction="row" alignItems="center" spacing={2} mb={0.5}>
-          <Typography sx={{ fontSize: 11, color: '#445566', width: 44, flexShrink: 0, letterSpacing: '0.06em' }}>
-            Show
-          </Typography>
-          <Stack direction="row" spacing={1.5} flex={1}>
-            <Button
-              fullWidth variant="outlined" size="small"
-              onClick={() => onUpdate({ showOrbits: !state.showOrbits })}
-              sx={{ ...activeStyle(state.showOrbits), fontSize: 12, py: 1.2, borderRadius: '10px' }}
-            >
-              Orbits
-            </Button>
-            <Button
-              fullWidth variant="outlined" size="small"
-              onClick={() => onUpdate({ showLabels: !state.showLabels })}
-              sx={{ ...activeStyle(state.showLabels), fontSize: 12, py: 1.2, borderRadius: '10px' }}
-            >
-              Labels
-            </Button>
-          </Stack>
-        </Stack>
-
-        <Divider />
-
-        {/* Reset */}
-        <Button
-          fullWidth variant="outlined"
-          onClick={onResetView}
-          sx={{
-            ...activeStyle(false),
-            fontSize: 12, py: 1.4, borderRadius: '10px',
-            color: '#445566',
-            '&:hover': { color: '#8899bb', background: 'rgba(255,255,255,0.07)' },
-          }}
+      {/* Playback */}
+      <div className={SECTION_LABEL}>Playback</div>
+      <div className="flex gap-3 mb-5">
+        <button
+          className={btn(!state.paused, 'flex-1 py-3 text-[14px]')}
+          onClick={() => onUpdate({ paused: !state.paused })}
         >
-          ↺  Reset View
-        </Button>
-      </Paper>
-    </ThemeProvider>
+          {state.paused ? '▶  Play' : '⏸  Pause'}
+        </button>
+        <button
+          className={btn(false, 'flex-1 py-3 text-[14px]')}
+          onClick={onJumpToNow}
+        >
+          ⊙  Today
+        </button>
+      </div>
+
+      {/* Speed */}
+      <div className="flex items-center gap-3 mb-7">
+        <span className="text-[11px] tracking-[0.08em] text-[#5d6f97] w-12 shrink-0 uppercase">
+          Speed
+        </span>
+        <input
+          type="range"
+          min={-1} max={5.5} step={0.05}
+          value={state.speedExp}
+          onChange={(e) => onUpdate({ speedExp: parseFloat(e.target.value) })}
+          className="flex-1"
+        />
+        <span className="text-[12px] text-[#ffd966] text-right w-[60px] shrink-0 tabular-nums">
+          {fmtSpeed(state.speedExp)}
+        </span>
+      </div>
+
+      <div className="border-t border-[rgba(80,120,255,0.15)] mb-6" />
+
+      {/* View */}
+      <div className={SECTION_LABEL}>View</div>
+      <div className="flex gap-2.5 mb-5">
+        {([
+          ['Top',  () => onSetViewAngle(0, 0)],
+          ['Edge', () => onSetViewAngle(0, Math.PI / 2)],
+          ['3D',   () => onSetViewAngle(Math.PI / 5, Math.PI / 4)],
+        ] as [string, () => void][]).map(([label, handler]) => (
+          <button
+            key={label}
+            onClick={handler}
+            className={btn(false, 'flex-1 py-3 text-[13px]')}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <div className={SECTION_LABEL}>Scale</div>
+      <div className="flex gap-2.5 mb-5">
+        <button
+          className={btn(!state.logScale, 'flex-1 py-3 text-[13px]')}
+          onClick={() => onUpdate({ logScale: false })}
+        >
+          Linear
+        </button>
+        <button
+          className={btn(state.logScale, 'flex-1 py-3 text-[13px]')}
+          onClick={() => onUpdate({ logScale: true })}
+        >
+          Log
+        </button>
+      </div>
+
+      <div className={SECTION_LABEL}>Show</div>
+      <div className="flex gap-2.5 mb-6">
+        <button
+          className={btn(state.showOrbits, 'flex-1 py-3 text-[13px]')}
+          onClick={() => onUpdate({ showOrbits: !state.showOrbits })}
+        >
+          Orbits
+        </button>
+        <button
+          className={btn(state.showLabels, 'flex-1 py-3 text-[13px]')}
+          onClick={() => onUpdate({ showLabels: !state.showLabels })}
+        >
+          Labels
+        </button>
+      </div>
+
+      <div className="border-t border-[rgba(80,120,255,0.15)] mb-6" />
+
+      {/* Black holes */}
+      <div className={SECTION_LABEL}>
+        Black Holes <span className="text-[#ffa66b] ml-1">{blackHoleCount > 0 ? `(${blackHoleCount})` : ''}</span>
+      </div>
+      <div className="flex gap-2.5 mb-6">
+        <button
+          className={dangerBtn(placingBH, 'flex-[2] py-3 text-[13px]')}
+          onClick={onTogglePlaceBH}
+        >
+          {placingBH ? '✕  Cancel' : '⬤  Place'}
+        </button>
+        <button
+          className={btn(false, 'flex-1 py-3 text-[13px] disabled:opacity-40 disabled:cursor-not-allowed')}
+          onClick={onClearBlackHoles}
+          disabled={blackHoleCount === 0}
+        >
+          Clear
+        </button>
+      </div>
+
+      <button
+        onClick={onResetView}
+        className={`${BTN_BASE} w-full py-3 text-[13px] bg-white/[0.04] border-white/10
+                    text-[#5d6f97] hover:text-[#9aabd0] hover:bg-white/[0.08]`}
+      >
+        ↺  Reset View
+      </button>
+    </div>
   );
 }

@@ -1,36 +1,45 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Solar System Simulation
 
-## Getting Started
+Interactive Keplerian solar system simulation built with Next.js 16, React 19, and Tailwind CSS 4. All eight planets are propagated from J2000 orbital elements; the view supports zoom, pan, rotation, time control, and click-to-place black holes.
 
-First, run the development server:
+## Local development
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Deploy to Vercel
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+This project is a standard Next.js app and deploys to Vercel with zero configuration.
 
-## Learn More
+**One-click:**
 
-To learn more about Next.js, take a look at the following resources:
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/your-username/solar-system-simulation)
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+**Manual:**
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+1. Push this repo to GitHub / GitLab / Bitbucket.
+2. Go to [vercel.com/new](https://vercel.com/new) and import the repository.
+3. Accept the auto-detected settings — framework: **Next.js**, build: `next build`, output: `.next`. No environment variables are required.
+4. Click **Deploy**.
 
-## Deploy on Vercel
+Or, with the [Vercel CLI](https://vercel.com/docs/cli):
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```bash
+npm i -g vercel
+vercel        # preview deploy
+vercel --prod # production deploy
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Node 20+ is required (declared in `package.json` `engines`); Vercel selects a compatible runtime automatically.
+
+## Controls
+
+- **Scroll** — zoom
+- **Left-drag** — pan
+- **Right-drag** — rotate (azimuth + elevation)
+- **Hover** — planet info
+- **Place** button — then click to drop a black hole; Esc to cancel
