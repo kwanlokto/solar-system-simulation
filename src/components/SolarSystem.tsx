@@ -7,7 +7,7 @@ import type { PlanetData, PlanetPos } from '@/lib/orbital';
 import { keplerStateAt, stepVerlet, segmentCapturesAny, MAX_SUBSTEP_DAYS, MAX_SUBSTEPS, type BodyState, type MassivePoint } from '@/lib/nbody';
 import ControlPanel from './ControlPanel';
 
-const BH_MASS = 1000.0; // solar masses — intermediate-mass BH territory, dominates the system
+const DEFAULT_BH_MASS_EXP = 4; // 10^4 = 10,000 M☉
 const TRAIL_LEN = 90;
 
 export interface SimState {
@@ -72,6 +72,14 @@ export default function SolarSystem() {
   const [blackHoles, setBlackHoles] = useState<BlackHole[]>([]);
   const blackHolesRef = useRef<BlackHole[]>([]);
   useEffect(() => { blackHolesRef.current = blackHoles; }, [blackHoles]);
+
+  // Log-mass exponent: actual mass = 10^bhMassExp solar masses.
+  const [bhMassExp, setBhMassExp] = useState(DEFAULT_BH_MASS_EXP);
+  // Retroactively resize existing BHs when the slider moves.
+  useEffect(() => {
+    const mass = Math.pow(10, bhMassExp);
+    setBlackHoles(prev => prev.length === 0 ? prev : prev.map(bh => ({ ...bh, mass })));
+  }, [bhMassExp]);
 
   const [placingBH, setPlacingBH] = useState(false);
   const placingBHRef = useRef(false);
@@ -642,10 +650,10 @@ export default function SolarSystem() {
         });
         beltAliveRef.current = BELT.map(() => true);
       }
-      return [...prev, { id: Date.now() + Math.random(), x: pos.x, y: pos.y, z: 0, mass: BH_MASS }];
+      return [...prev, { id: Date.now() + Math.random(), x: pos.x, y: pos.y, z: 0, mass: Math.pow(10, bhMassExp) }];
     });
     setPlacingBH(false);
-  }, [screenToEcliptic]);
+  }, [screenToEcliptic, bhMassExp]);
 
   const cursor = placingBH
     ? 'crosshair'
@@ -679,6 +687,8 @@ export default function SolarSystem() {
         sunProgress={sunProgress}
         blackHoleCount={blackHoles.length}
         placingBH={placingBH}
+        bhMassExp={bhMassExp}
+        onBhMassExpChange={setBhMassExp}
         onUpdate={updateState}
         onResetView={resetView}
         onJumpToNow={jumpToNow}

@@ -10,6 +10,13 @@ function fmtSpeed(exp: number): string {
   return `${(dps / 365.25).toFixed(1)} y/s`;
 }
 
+function fmtBHMass(exp: number): string {
+  const m = Math.pow(10, exp);
+  if (m < 1e3) return `${m < 10 ? m.toFixed(1) : m.toFixed(0)} M☉`;
+  if (m < 1e6) return `${(m / 1e3).toFixed(m < 1e4 ? 1 : 0)}k M☉`;
+  return `${(m / 1e6).toFixed(m < 1e7 ? 1 : 0)}M M☉`;
+}
+
 const BTN_BASE =
   'rounded-xl text-[13px] leading-tight tracking-[0.03em] font-mono select-none ' +
   'border transition-all duration-150 cursor-pointer';
@@ -48,6 +55,8 @@ interface Props {
   sunProgress: number;
   blackHoleCount: number;
   placingBH: boolean;
+  bhMassExp: number;
+  onBhMassExpChange: (exp: number) => void;
   onUpdate: (patch: Partial<SimState>) => void;
   onResetView: () => void;
   onJumpToNow: () => void;
@@ -58,6 +67,7 @@ interface Props {
 
 export default function ControlPanel({
   state, dateStr, sunAgeGyr, sunProgress, blackHoleCount, placingBH,
+  bhMassExp, onBhMassExpChange,
   onUpdate, onResetView, onJumpToNow, onSetViewAngle,
   onTogglePlaceBH, onClearBlackHoles,
 }: Props) {
@@ -200,6 +210,23 @@ export default function ControlPanel({
       <div className={SECTION_LABEL}>
         Black Holes <span className="text-[#ffa66b] ml-1">{blackHoleCount > 0 ? `(${blackHoleCount})` : ''}</span>
       </div>
+
+      <div className="flex items-center gap-3 mb-5">
+        <span className="text-[11px] tracking-[0.08em] text-[#5d6f97] w-12 shrink-0 uppercase">
+          Mass
+        </span>
+        <input
+          type="range"
+          min={0} max={7} step={0.1}
+          value={bhMassExp}
+          onChange={(e) => onBhMassExpChange(parseFloat(e.target.value))}
+          className="flex-1"
+        />
+        <span className="text-[12px] text-[#ffa66b] text-right w-18 shrink-0 tabular-nums">
+          {fmtBHMass(bhMassExp)}
+        </span>
+      </div>
+
       <div className="flex gap-2.5 mb-6">
         <button
           className={dangerBtn(placingBH, 'flex-[2] py-3 text-[13px]')}
