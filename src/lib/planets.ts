@@ -31,16 +31,32 @@ export const PLANETS: PlanetData[] = [
 
 export const MOON = { color: '#c8c8b8', radius: 2, orbitPx: 22, period: 27.321582 };
 
-// Deterministic asteroid belt particles (ecliptic plane, z≈0)
+// Deterministic asteroid belt particles (ecliptic plane, z≈0).
+// Each particle is a circular orbit (a=r) with Keplerian angular velocity.
 function lcg(s: number): number {
   return (((s * 1664525 + 1013904223) | 0) >>> 0);
 }
-export const BELT: { t: number; r: number }[] = [];
+export interface BeltParticle {
+  /** angle at J2000, radians */
+  t0: number;
+  /** orbital radius AU */
+  r: number;
+  /** angular velocity, rad/day */
+  omega: number;
+}
+const _GM_SUN_DAY = 0.01720209895 * 0.01720209895;
+export const BELT: BeltParticle[] = [];
 {
   let s = 0x12345678;
   for (let i = 0; i < 1800; i++) {
-    s = lcg(s); const t = (s & 0xffff) / 65535 * Math.PI * 2;
+    s = lcg(s); const t0 = (s & 0xffff) / 65535 * Math.PI * 2;
     s = lcg(s); const r = 2.2 + (s & 0xffff) / 65535 * 1.0;
-    BELT.push({ t, r });
+    BELT.push({ t0, r, omega: Math.sqrt(_GM_SUN_DAY / (r * r * r)) });
   }
+}
+
+const _J2000 = 2451545.0;
+/** Current angle of a belt particle at the given Julian date (Kepler-circular). */
+export function beltAngle(p: BeltParticle, jd: number): number {
+  return p.t0 + p.omega * (jd - _J2000);
 }

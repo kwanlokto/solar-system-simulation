@@ -1,13 +1,13 @@
 'use client';
 
 import { useEffect, useRef, useCallback, useState } from 'react';
-import { PLANETS, MOON, BELT } from '@/lib/planets';
+import { PLANETS, MOON, BELT, beltAngle } from '@/lib/planets';
 import { getPlanetPosition, getOrbitPath, dateToJD, fmtDate, auMap } from '@/lib/orbital';
 import type { PlanetData, PlanetPos } from '@/lib/orbital';
-import { keplerStateAt, stepVerlet, MAX_SUBSTEP_DAYS, MAX_SUBSTEPS, type BodyState } from '@/lib/nbody';
+import { keplerStateAt, stepVerlet, segmentCapturesAny, MAX_SUBSTEP_DAYS, MAX_SUBSTEPS, type BodyState, type MassivePoint } from '@/lib/nbody';
 import ControlPanel from './ControlPanel';
 
-const BH_MASS = 1.0; // solar masses, applied to every placed black hole
+const BH_MASS = 1000.0; // solar masses — intermediate-mass BH territory, dominates the system
 const TRAIL_LEN = 90;
 
 export interface SimState {
@@ -88,6 +88,20 @@ export default function SolarSystem() {
   const trailsRef = useRef<Array<Array<[number, number, number]>>>(
     PLANETS.map(() => [])
   );
+  // Per-planet alive flag. A planet whose distance to any BH drops below
+  // CAPTURE_RADIUS is marked dead and skipped by the integrator and renderer.
+  const aliveRef = useRef<boolean[]>(PLANETS.map(() => true));
+  // Sun is itself a body in N-body mode — it feels BH gravity and can be consumed.
+  const sunStateRef = useRef<BodyState>({ x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 });
+  const sunAliveRef = useRef(true);
+  // Reusable MassivePoint view onto sunStateRef so we don't allocate every substep.
+  const sunMassiveRef = useRef<MassivePoint>({ x: 0, y: 0, z: 0, mass: 1.0 });
+  // Trail of Sun positions in N-body mode (only meaningful once it starts moving).
+  const sunTrailRef = useRef<Array<[number, number, number]>>([]);
+  // Asteroid belt: in N-body mode we integrate each particle and let BHs capture them.
+  // Null = Kepler-analytic (particles orbit Sun on circular orbits).
+  const beltNbodyRef = useRef<BodyState[] | null>(null);
+  const beltAliveRef = useRef<boolean[]>(BELT.map(() => true));
 
   const [dateStr, setDateStr] = useState('');
   const [sunAgeGyr, setSunAgeGyr] = useState(SUN_AGE_J2000_YEARS / 1e9);
@@ -121,6 +135,12 @@ export default function SolarSystem() {
   const clearBlackHoles = useCallback(() => {
     nbodyRef.current = null;
     trailsRef.current = PLANETS.map(() => []);
+    aliveRef.current = PLANETS.map(() => true);
+    sunStateRef.current = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 };
+    sunAliveRef.current = true;
+    sunTrailRef.current = [];
+    beltNbodyRef.current = null;
+    beltAliveRef.current = BELT.map(() => true);
     setBlackHoles([]);
   }, []);
 
@@ -174,8 +194,44 @@ export default function SolarSystem() {
         const dtSub = advance / nSub;
         const bhs = blackHolesRef.current;
         const states = nbodyRef.current;
+        const alive = aliveRef.current;
+        const sunState = sunStateRef.current;
+        const sunMass = sunMassiveRef.current;
         for (let i = 0; i < nSub; i++) {
-          for (let j = 0; j < states.length; j++) stepVerlet(states[j], bhs, dtSub);
+          // 1. Advance the Sun first (only BHs pull on it).
+          if (sunAliveRef.current) {
+            const px = sunState.x, py = sunState.y, pz = sunState.z;
+            stepVerlet(sunState, null, bhs, dtSub);
+            if (segmentCapturesAny(px, py, pz, sunState.x, sunState.y, sunState.z, bhs)) {
+              sunAliveRef.current = false;
+            }
+            sunMass.x = sunState.x; sunMass.y = sunState.y; sunMass.z = sunState.z;
+          }
+          // 2. Advance each surviving planet using current Sun position.
+          const sunArg = sunAliveRef.current ? sunMass : null;
+          for (let j = 0; j < states.length; j++) {
+            if (!alive[j]) continue;
+            const s = states[j];
+            const px = s.x, py = s.y, pz = s.z;
+            stepVerlet(s, sunArg, bhs, dtSub);
+            if (segmentCapturesAny(px, py, pz, s.x, s.y, s.z, bhs)) {
+              alive[j] = false;
+            }
+          }
+          // 3. Advance asteroid belt (test particles, same forces as planets).
+          const belt = beltNbodyRef.current;
+          if (belt) {
+            const beltAlive = beltAliveRef.current;
+            for (let j = 0; j < belt.length; j++) {
+              if (!beltAlive[j]) continue;
+              const s = belt[j];
+              const px = s.x, py = s.y, pz = s.z;
+              stepVerlet(s, sunArg, bhs, dtSub);
+              if (segmentCapturesAny(px, py, pz, s.x, s.y, s.z, bhs)) {
+                beltAlive[j] = false;
+              }
+            }
+          }
         }
         simJDRef.current += advance;
       } else {
@@ -185,7 +241,9 @@ export default function SolarSystem() {
 
     // Refresh cached positions used by render + hover detection.
     if (nbodyRef.current) {
+      const alive = aliveRef.current;
       for (let i = 0; i < PLANETS.length; i++) {
+        if (!alive[i]) continue;
         const s = nbodyRef.current[i];
         const r = Math.sqrt(s.x * s.x + s.y * s.y + s.z * s.z);
         positionsRef.current[i] = { x: s.x, y: s.y, z: s.z, r };
@@ -235,19 +293,37 @@ export default function SolarSystem() {
       ctx.fill();
     }
 
-    for (const { t, r } of BELT) {
-      const [sx, sy] = toScreen(r * Math.cos(t), r * Math.sin(t), 0);
-      ctx.beginPath();
-      ctx.arc(sx, sy, 0.6, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(160,140,100,0.35)';
-      ctx.fill();
+    ctx.fillStyle = 'rgba(160,140,100,0.35)';
+    if (beltNbodyRef.current) {
+      const belt = beltNbodyRef.current;
+      const beltAlive = beltAliveRef.current;
+      for (let i = 0; i < belt.length; i++) {
+        if (!beltAlive[i]) continue;
+        const b = belt[i];
+        const [sx, sy] = toScreen(b.x, b.y, b.z);
+        ctx.beginPath();
+        ctx.arc(sx, sy, 0.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else {
+      const jd = simJDRef.current;
+      for (const p of BELT) {
+        const t = beltAngle(p, jd);
+        const [sx, sy] = toScreen(p.r * Math.cos(t), p.r * Math.sin(t), 0);
+        ctx.beginPath();
+        ctx.arc(sx, sy, 0.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
 
     const nbodyOn = nbodyRef.current !== null;
 
     if (showOrbits) {
       const orbitAlphaHex = nbodyOn ? '15' : '30';
-      for (const p of PLANETS) {
+      const alive = aliveRef.current;
+      for (let i = 0; i < PLANETS.length; i++) {
+        if (!alive[i]) continue;
+        const p = PLANETS[i];
         const path = getOrbitPath(p);
         ctx.beginPath();
         path.forEach(([ax, ay, az], i) => {
@@ -264,7 +340,9 @@ export default function SolarSystem() {
     // Perturbation trails (under planets, above orbit rings)
     if (nbodyOn) {
       ctx.lineWidth = 1.4;
+      const alive = aliveRef.current;
       for (let i = 0; i < PLANETS.length; i++) {
+        if (!alive[i]) continue;
         const trail = trailsRef.current[i];
         if (trail.length < 2) continue;
         const color = PLANETS[i].color;
@@ -283,35 +361,63 @@ export default function SolarSystem() {
       }
     }
 
-    // Sun
-    let g = ctx.createRadialGradient(cx, cy, 4, cx, cy, 60);
-    g.addColorStop(0, 'rgba(255,200,30,0.5)');
-    g.addColorStop(0.3, 'rgba(255,130,0,0.2)');
-    g.addColorStop(1, 'rgba(255,80,0,0)');
-    ctx.beginPath(); ctx.arc(cx, cy, 60, 0, Math.PI * 2);
-    ctx.fillStyle = g; ctx.fill();
-    g = ctx.createRadialGradient(cx, cy, 0, cx, cy, 20);
-    g.addColorStop(0, 'rgba(255,255,180,1)');
-    g.addColorStop(0.4, 'rgba(255,200,30,0.9)');
-    g.addColorStop(1, 'rgba(255,110,0,0.7)');
-    ctx.beginPath(); ctx.arc(cx, cy, 20, 0, Math.PI * 2);
-    ctx.fillStyle = g; ctx.fill();
+    // Sun (projected through toScreen so it can drift in N-body mode)
+    let sunSX = cx, sunSY = cy;
+    if (nbodyOn) {
+      const ss = sunStateRef.current;
+      [sunSX, sunSY] = toScreen(ss.x, ss.y, ss.z);
+      // Record trail
+      const tr = sunTrailRef.current;
+      tr.push([ss.x, ss.y, ss.z]);
+      if (tr.length > TRAIL_LEN) tr.shift();
+      if (tr.length >= 2) {
+        ctx.lineWidth = 1.4;
+        for (let k = 1; k < tr.length; k++) {
+          const t0 = tr[k - 1], t1 = tr[k];
+          const [sx0, sy0] = toScreen(t0[0], t0[1], t0[2]);
+          const [sx1, sy1] = toScreen(t1[0], t1[1], t1[2]);
+          const a = k / tr.length;
+          const ah = Math.floor(a * 220).toString(16).padStart(2, '0');
+          ctx.beginPath();
+          ctx.moveTo(sx0, sy0); ctx.lineTo(sx1, sy1);
+          ctx.strokeStyle = '#ffcc44' + ah;
+          ctx.stroke();
+        }
+      }
+    }
 
-    if (showLabels) {
-      ctx.fillStyle = 'rgba(255,221,68,0.6)';
-      ctx.font = '11px monospace';
-      ctx.textAlign = 'left';
-      ctx.fillText('Sun', cx + 22, cy - 18);
+    if (sunAliveRef.current) {
+      let g = ctx.createRadialGradient(sunSX, sunSY, 4, sunSX, sunSY, 60);
+      g.addColorStop(0, 'rgba(255,200,30,0.5)');
+      g.addColorStop(0.3, 'rgba(255,130,0,0.2)');
+      g.addColorStop(1, 'rgba(255,80,0,0)');
+      ctx.beginPath(); ctx.arc(sunSX, sunSY, 60, 0, Math.PI * 2);
+      ctx.fillStyle = g; ctx.fill();
+      g = ctx.createRadialGradient(sunSX, sunSY, 0, sunSX, sunSY, 20);
+      g.addColorStop(0, 'rgba(255,255,180,1)');
+      g.addColorStop(0.4, 'rgba(255,200,30,0.9)');
+      g.addColorStop(1, 'rgba(255,110,0,0.7)');
+      ctx.beginPath(); ctx.arc(sunSX, sunSY, 20, 0, Math.PI * 2);
+      ctx.fillStyle = g; ctx.fill();
+
+      if (showLabels) {
+        ctx.fillStyle = 'rgba(255,221,68,0.6)';
+        ctx.font = '11px monospace';
+        ctx.textAlign = 'left';
+        ctx.fillText('Sun', sunSX + 22, sunSY - 18);
+      }
     }
 
     const jd = simJDRef.current;
-    const planetList = PLANETS.map((p, i) => {
-      const pos = positionsRef.current[i];
-      return { p, pos, depth: camZ(pos.x, pos.y, pos.z) };
-    });
+    const alivePlanets = aliveRef.current;
+    const planetList = PLANETS
+      .map((p, i) => ({ p, i, pos: positionsRef.current[i] }))
+      .filter(({ i }) => alivePlanets[i])
+      .map(({ p, i, pos }) => ({ p, i, pos, depth: camZ(pos.x, pos.y, pos.z) }));
     planetList.sort((a, b) => b.depth - a.depth);
 
     let earthSX = 0, earthSY = 0;
+    let earthVisible = false;
     for (const { p, pos } of planetList) {
       const [sx, sy] = toScreen(pos.x, pos.y, pos.z);
       const r = Math.max(p.displayRadius, 2.5);
@@ -348,18 +454,20 @@ export default function SolarSystem() {
         ctx.fillText(p.name, sx + r + 5, sy - r + 1);
       }
 
-      if (p.name === 'Earth') { earthSX = sx; earthSY = sy; }
+      if (p.name === 'Earth') { earthSX = sx; earthSY = sy; earthVisible = true; }
     }
 
-    const moonAngle = (jd / MOON.period) * Math.PI * 2;
-    ctx.beginPath();
-    ctx.arc(earthSX, earthSY, MOON.orbitPx, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(200,200,180,0.1)'; ctx.lineWidth = 0.7; ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(earthSX + Math.cos(moonAngle) * MOON.orbitPx,
-            earthSY - Math.sin(moonAngle) * MOON.orbitPx,
-            MOON.radius, 0, Math.PI * 2);
-    ctx.fillStyle = MOON.color; ctx.fill();
+    if (earthVisible) {
+      const moonAngle = (jd / MOON.period) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.arc(earthSX, earthSY, MOON.orbitPx, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(200,200,180,0.1)'; ctx.lineWidth = 0.7; ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(earthSX + Math.cos(moonAngle) * MOON.orbitPx,
+              earthSY - Math.sin(moonAngle) * MOON.orbitPx,
+              MOON.radius, 0, Math.PI * 2);
+      ctx.fillStyle = MOON.color; ctx.fill();
+    }
 
     // Black holes (with depth sort against planets would be ideal; for clarity render on top)
     const bhList = blackHolesRef.current.map(bh => ({
@@ -484,7 +592,9 @@ export default function SolarSystem() {
 
     let found: PlanetData | null = null;
     let foundDist = 0;
+    const alive = aliveRef.current;
     for (let i = 0; i < PLANETS.length; i++) {
+      if (!alive[i]) continue;
       const p = PLANETS[i];
       const pos = positionsRef.current[i];
       const x1 = pos.x * cosAz + pos.y * sinAz;
@@ -518,6 +628,19 @@ export default function SolarSystem() {
         // Transitioning Kepler → N-body: seed integrator state from current Kepler positions.
         nbodyRef.current = PLANETS.map(p => keplerStateAt(p, simJDRef.current));
         trailsRef.current = PLANETS.map(() => []);
+        aliveRef.current = PLANETS.map(() => true);
+        sunStateRef.current = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 };
+        sunAliveRef.current = true;
+        sunTrailRef.current = [];
+        // Seed belt: circular-orbit position + tangential velocity ω·r.
+        const jd = simJDRef.current;
+        beltNbodyRef.current = BELT.map(p => {
+          const t = beltAngle(p, jd);
+          const cos = Math.cos(t), sin = Math.sin(t);
+          const v = p.omega * p.r;
+          return { x: p.r * cos, y: p.r * sin, z: 0, vx: -v * sin, vy: v * cos, vz: 0 };
+        });
+        beltAliveRef.current = BELT.map(() => true);
       }
       return [...prev, { id: Date.now() + Math.random(), x: pos.x, y: pos.y, z: 0, mass: BH_MASS }];
     });
