@@ -6,6 +6,7 @@ import { getPlanetPosition, getOrbitPath, dateToJD, fmtDate, auMap } from '@/lib
 import type { PlanetData, PlanetPos } from '@/lib/orbital';
 import { keplerStateAt, stepVerlet, segmentCapturesAny, MAX_SUBSTEP_DAYS, MAX_SUBSTEPS, type BodyState, type MassivePoint } from '@/lib/nbody';
 import ControlPanel from './ControlPanel';
+import OrientationGizmo from './OrientationGizmo';
 
 const DEFAULT_BH_MASS_EXP = 4; // 10^4 = 10,000 M☉
 const TRAIL_LEN = 90;
@@ -85,6 +86,9 @@ export default function SolarSystem() {
   const placingBHRef = useRef(false);
   useEffect(() => { placingBHRef.current = placingBH; }, [placingBH]);
 
+  // Mirror of viewRef rotation, exposed to React so the orientation gizmo can re-render.
+  const [viewAngle, setViewAngleState] = useState<{ az: number; el: number }>({ az: 0, el: 0 });
+
   // When any BH is placed, planets are integrated numerically from this state.
   // Null = pure-Kepler analytical propagation.
   const nbodyRef = useRef<BodyState[] | null>(null);
@@ -126,6 +130,7 @@ export default function SolarSystem() {
 
   const resetView = useCallback(() => {
     viewRef.current = { zoom: 1, panX: 0, panY: 0, rotAz: 0, rotEl: 0 };
+    setViewAngleState({ az: 0, el: 0 });
   }, []);
 
   const jumpToNow = useCallback(() => {
@@ -137,6 +142,7 @@ export default function SolarSystem() {
     viewRef.current.rotEl = el;
     viewRef.current.panX = 0;
     viewRef.current.panY = 0;
+    setViewAngleState({ az, el });
   }, []);
 
   const togglePlaceBH = useCallback(() => setPlacingBH(v => !v), []);
@@ -583,9 +589,12 @@ export default function SolarSystem() {
     if (rotDragRef.current) {
       const d = rotDragRef.current;
       const SENS = 0.005;
-      viewRef.current.rotAz = d.az + (e.clientX - d.x) * SENS;
-      viewRef.current.rotEl = Math.max(-Math.PI / 2, Math.min(Math.PI / 2,
+      const newAz = d.az + (e.clientX - d.x) * SENS;
+      const newEl = Math.max(-Math.PI, Math.min(Math.PI,
         d.el - (e.clientY - d.y) * SENS));
+      viewRef.current.rotAz = newAz;
+      viewRef.current.rotEl = newEl;
+      setViewAngleState({ az: newAz, el: newEl });
     }
 
     const canvas = canvasRef.current!;
@@ -695,6 +704,13 @@ export default function SolarSystem() {
         onSetViewAngle={setViewAngle}
         onTogglePlaceBH={togglePlaceBH}
         onClearBlackHoles={clearBlackHoles}
+      />
+
+      <OrientationGizmo
+        rotAz={viewAngle.az}
+        rotEl={viewAngle.el}
+        onSetViewAngle={setViewAngle}
+        onResetView={resetView}
       />
 
       {placingBH && (
