@@ -60,7 +60,6 @@ interface Props {
   onUpdate: (patch: Partial<SimState>) => void;
   onResetView: () => void;
   onJumpToNow: () => void;
-  onSetViewAngle: (az: number, el: number) => void;
   onTogglePlaceBH: () => void;
   onClearBlackHoles: () => void;
 }
@@ -68,7 +67,7 @@ interface Props {
 export default function ControlPanel({
   state, dateStr, sunAgeGyr, sunProgress, blackHoleCount, placingBH,
   bhMassExp, onBhMassExpChange,
-  onUpdate, onResetView, onJumpToNow, onSetViewAngle,
+  onUpdate, onResetView, onJumpToNow,
   onTogglePlaceBH, onClearBlackHoles,
 }: Props) {
   return (
@@ -153,24 +152,6 @@ export default function ControlPanel({
       </div>
 
       <div className="border-t border-[rgba(80,120,255,0.15)] mb-6" />
-
-      {/* View */}
-      <div className={SECTION_LABEL}>View</div>
-      <div className="flex gap-2.5 mb-5">
-        {([
-          ['Top',  () => onSetViewAngle(0, 0)],
-          ['Edge', () => onSetViewAngle(0, Math.PI / 2)],
-          ['3D',   () => onSetViewAngle(Math.PI / 5, Math.PI / 4)],
-        ] as [string, () => void][]).map(([label, handler]) => (
-          <button
-            key={label}
-            onClick={handler}
-            className={btn(false, 'flex-1 py-3 text-[13px]')}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
 
       <div className={SECTION_LABEL}>Scale</div>
       <div className="flex gap-2.5 mb-5">

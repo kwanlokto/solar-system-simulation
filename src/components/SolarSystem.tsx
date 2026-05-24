@@ -701,7 +701,6 @@ export default function SolarSystem() {
         onUpdate={updateState}
         onResetView={resetView}
         onJumpToNow={jumpToNow}
-        onSetViewAngle={setViewAngle}
         onTogglePlaceBH={togglePlaceBH}
         onClearBlackHoles={clearBlackHoles}
       />
